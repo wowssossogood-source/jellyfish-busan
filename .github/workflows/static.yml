@@ -1,0 +1,52 @@
+name: Ocean data and Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v6
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Collect ocean data
+        run: python3 ocean_collect.py --output ocean_data
+
+      - name: Prepare website
+        run: |
+          mkdir -p _site/ocean_data
+          cp index.html _site/index.html
+          cp ocean_data/latest.json _site/ocean_data/latest.json
+          cp ocean_data/status.json _site/ocean_data/status.json
+
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4
