@@ -33,17 +33,40 @@ a{color:#126d87}
 #cards{grid-template-columns:1fr}h1{font-size:25px}
 }
 </style>
-</head>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+main{max-width:1200px}.workspace{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;margin-bottom:26px}.panel{background:white;padding:22px;border-radius:20px}#map{height:440px;border-radius:12px;background:#ddeaf0;z-index:0}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.toolbar button{margin:0 0 12px}.secondary{background:#e5eef3;color:#173047}label{display:block;font-size:14px;margin:12px 0 5px}input,select,textarea{width:100%;padding:11px;border:1px solid #a7bdca;border-radius:8px;font:inherit;background:white;color:#173047}.coordinates{display:grid;grid-template-columns:1fr 1fr;gap:10px}textarea{resize:vertical}#records{margin:18px 0}.record{border-top:1px solid #d9e5eb;padding:15px 0}.record p{margin:5px 0}.record button{margin:6px 8px 0 0}.hint{color:#5b6f7b;font-size:14px}.local{background:#fff3d9;border-radius:10px;padding:12px;font-size:14px}button:disabled{opacity:.5;cursor:wait}:focus-visible{outline:3px solid #e58e23;outline-offset:3px}#form-message{min-height:24px}.legend{font-size:14px;margin:8px 0}.legend span{margin-right:18px}@media(max-width:800px){.workspace{grid-template-columns:1fr}#map{height:340px}}
+</style></head>
 <body>
 <main>
 <header>
 <small>BUSAN · OCEAN WATCH</small>
-<h1>송정·해운대 해양 관측</h1>
-<p>해파리 대응을 위한 환경정보를 확인합니다.</p>
+<h1>송정·해운대 해파리 관측 지도</h1>
+<p>발견 지점을 기록하고 주변 해양 관측자료를 함께 확인하세요.</p>
 <div id="notice" role="status">관측자료를 불러오는 중입니다.</div>
 <button id="refresh">자료 다시 읽기</button>
 </header>
-<section id="cards"></section>
+<div class="workspace">
+<section class="panel" aria-label="관측 지도">
+<h2>어디에서 발견했나요?</h2>
+<div class="toolbar"><button type="button" class="secondary" id="view-all">전체 보기</button><button type="button" class="secondary" id="view-hae">해운대</button><button type="button" class="secondary" id="view-song">송정</button></div>
+<div id="map" aria-label="해운대와 송정 지도"></div>
+<div class="legend"><span>🔵 해양 관측 부이</span><span>🟠 미검증 발견 기록</span></div>
+<p class="hint" id="map-hint">지도를 클릭하면 입력란에 좌표가 들어갑니다. 좌표를 직접 입력할 수도 있어요.</p>
+</section>
+<section class="panel">
+<h2>발견 기록 남기기</h2>
+<p class="local">개인 기록 시제품 · 이 브라우저에만 저장됩니다. 다른 사람에게 자동 공개되거나 담당자에게 접수되지 않습니다.</p>
+<form id="report-form">
+<label for="beach">해수욕장</label><select id="beach"><option>해운대</option><option>송정</option></select>
+<div class="coordinates"><div><label for="lat">위도</label><input id="lat" type="number" step="any" min="35.1" max="35.22" required placeholder="지도에서 선택"></div><div><label for="lon">경도</label><input id="lon" type="number" step="any" min="129.12" max="129.26" required placeholder="지도에서 선택"></div></div>
+<label for="seen">발견 시각 (한국 시간)</label><input id="seen" type="datetime-local" required>
+<label for="species">종류 (관찰자 추정)</label><select id="species"><option>모름</option><option>노무라입깃해파리</option><option>보름달물해파리</option><option>기타</option></select>
+<label for="memo">메모</label><textarea id="memo" rows="2" maxlength="500" placeholder="마릿수, 주변 지형 등 관찰한 내용"></textarea>
+<button type="submit">이 브라우저에 저장</button><div id="form-message" role="status"></div>
+</form></section></div>
+<section class="panel"><h2>내 발견 기록 <span id="record-count">0</span>건</h2><p class="hint">모든 기록은 미검증입니다. 기록이 없다는 것은 해파리가 없거나 안전하다는 뜻이 아닙니다.</p><div class="toolbar"><button id="export" class="secondary">기록 파일 내려받기</button><button id="import" class="secondary">기록 파일 불러오기</button></div><input id="import-file" type="file" accept=".json,application/json" hidden><p id="storage-message" role="status" class="hint"></p><div id="records"></div></section>
+<h2 style="margin-top:28px">부이에서 측정한 해양 환경</h2><section id="cards"></section>
 <footer>
 <p>출처: 국립해양조사원 해양관측자료<br>
 표시값은 각 부이 지점의 관측값입니다.
@@ -154,6 +177,54 @@ async function update() {
 button.addEventListener("click", update);
 update();
 setInterval(update, 30000);
+</script>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const KEY = 'busan-jellyfish-reports-v1';
+const beaches = ['해운대','송정'];
+const kinds = ['모름','노무라입깃해파리','보름달물해파리','기타'];
+let reports=[], map, markers, selected;
+const nowInput=()=>new Date(Date.now()+9*3600000).toISOString().slice(0,16);
+$('seen').value=nowInput();
+function valid(r){return r && typeof r.id==='string' && r.id.length<100 && beaches.includes(r.beach) && kinds.includes(r.species) && typeof r.memo==='string' && r.memo.length<=500 && Number.isFinite(r.lat) && r.lat>=35.1 && r.lat<=35.22 && Number.isFinite(r.lon) && r.lon>=129.12 && r.lon<=129.26 && typeof r.seen==='string' && Number.isFinite(Date.parse(r.seen)) && Date.parse(r.seen)<=Date.now();}
+try {const old=JSON.parse(localStorage.getItem(KEY)||'[]');if(!Array.isArray(old)||old.length>1000||!old.every(valid))throw Error();reports=old;}catch(e){$('storage-message').textContent='기존 기록을 읽지 못했습니다. 저장 공간 또는 기록 파일을 확인하세요.';}
+function save(next){try{localStorage.setItem(KEY,JSON.stringify(next));reports=next;draw();return true;}catch(e){$('storage-message').textContent='저장하지 못했습니다. 브라우저 저장 공간 설정을 확인하세요.';return false;}}
+function choose(lat,lon){$('lat').value=lat.toFixed(6);$('lon').value=lon.toFixed(6);$('beach').value=lon>129.2?'송정':'해운대';if(map){if(selected)selected.remove();selected=L.circleMarker([lat,lon],{radius:9,color:'#173047',fillOpacity:.1}).addTo(map);} $('form-message').textContent='위치를 선택했어요. 해수욕장과 발견 시각을 확인하세요.';}
+if(window.L){
+map=L.map('map').setView([35.166,129.193],13);
+const tiles=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+tiles.on('tileerror',()=>{$('map-hint').textContent='배경 지도를 불러오지 못했습니다. 네트워크를 확인하거나 좌표를 직접 입력하세요.';});
+markers=L.layerGroup().addTo(map);
+for(const [name,lat,lon] of [['송정 부이 · TW_0090',35.164722,129.219444],['해운대 부이 · TW_0062',35.148972,129.170166]])L.circleMarker([lat,lon],{radius:9,color:'#126d87',fillColor:'#126d87',fillOpacity:1}).addTo(map).bindPopup(element('p',name));
+map.on('click',e=>choose(e.latlng.lat,e.latlng.lng));
+$('view-all').onclick=()=>map.setView([35.166,129.193],13);
+$('view-hae').onclick=()=>map.setView([35.1585,129.16],15);
+$('view-song').onclick=()=>map.setView([35.179,129.199],15);
+}else{$('map').textContent='지도 라이브러리를 불러오지 못했습니다. 네트워크 연결 후 새로고침하세요. 좌표 입력으로 기록은 가능합니다.';for(const id of ['view-all','view-hae','view-song'])$(id).disabled=true;}
+function draw(){
+$('records').replaceChildren();$('record-count').textContent=reports.length;if(markers)markers.clearLayers();
+if(!reports.length)$('records').append(element('p','아직 기록이 없습니다. 지도에서 발견 위치를 선택해 첫 기록을 남기세요.','hint'));
+for(const r of [...reports].sort((a,b)=>Date.parse(b.seen)-Date.parse(a.seen))){
+const row=element('div',undefined,'record');row.append(element('strong',r.beach+' · '+r.species+' · 미검증'));
+row.append(element('p',dateText(r.seen)+' · '+r.lat.toFixed(6)+', '+r.lon.toFixed(6),'hint'));
+if(r.memo)row.append(element('p',r.memo));
+let marker;if(map){const popup=element('div');popup.append(element('strong',r.beach+' · '+r.species+' (미검증)'),element('p',dateText(r.seen)),element('p',r.memo));marker=L.circleMarker([r.lat,r.lon],{radius:8,color:'#b8560c',fillColor:'#f7a13a',fillOpacity:.9}).addTo(markers).bindPopup(popup);}
+const view=element('button','지도에서 보기','secondary');view.disabled=!map;view.onclick=()=>{map.setView([r.lat,r.lon],16);marker.openPopup();$('map').scrollIntoView({behavior:'smooth',block:'center'});};
+const remove=element('button','삭제','secondary');remove.onclick=()=>{if(confirm('이 발견 기록을 삭제할까요?'))save(reports.filter(x=>x.id!==r.id));};row.append(view,remove);$('records').append(row);
+}}
+$('report-form').onsubmit=e=>{e.preventDefault();if(reports.length>=1000){$('form-message').textContent='최대 1,000건입니다. 기록을 내려받고 정리하세요.';return;}
+const r={id:crypto.randomUUID(),beach:$('beach').value,lat:Number($('lat').value),lon:Number($('lon').value),seen:$('seen').value+':00+09:00',species:$('species').value,memo:$('memo').value.trim()};
+if(!valid(r)){$('form-message').textContent='좌표는 송정·해운대 주변 범위로, 발견 시각은 현재 이전으로 입력하세요.';return;}
+if(save([...reports,r])){$('form-message').textContent='이 브라우저에 저장했습니다. 담당자 접수는 되지 않습니다.';$('memo').value='';}
+};
+$('export').onclick=()=>{const blob=new Blob([JSON.stringify({format:KEY,reports},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=element('a');a.href=url;a.download='jellyfish-records.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+$('import').onclick=()=>$('import-file').click();
+$('import-file').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>2000000)throw Error();const data=JSON.parse(await file.text());if(data.format!==KEY||!Array.isArray(data.reports)||!data.reports.every(valid))throw Error();const merged=new Map(reports.map(r=>[r.id,r]));for(const r of data.reports)if(!merged.has(r.id))merged.set(r.id,r);if(merged.size>1000)throw Error();const count=merged.size-reports.length;if(save([...merged.values()]))$('storage-message').textContent=count+'건을 추가했습니다. 같은 ID의 기록은 중복 추가하지 않습니다.';}catch(err){$('storage-message').textContent='불러오지 못했습니다. 이 앱에서 내보낸 JSON 파일인지, 좌표와 시각이 올바른지 확인하세요.';}e.target.value='';};
+draw();
+})();
 </script>
 </body>
 </html>
