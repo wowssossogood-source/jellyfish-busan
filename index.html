@@ -35,12 +35,12 @@ a{color:#126d87}
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
-main{max-width:1200px}.workspace{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;margin-bottom:26px}.panel{background:white;padding:22px;border-radius:20px}#map{height:440px;border-radius:12px;background:#ddeaf0;z-index:0}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.toolbar button{margin:0 0 12px}.secondary{background:#e5eef3;color:#173047}label{display:block;font-size:14px;margin:12px 0 5px}input,select,textarea{width:100%;padding:11px;border:1px solid #a7bdca;border-radius:8px;font:inherit;background:white;color:#173047}.coordinates{display:grid;grid-template-columns:1fr 1fr;gap:10px}textarea{resize:vertical}#records{margin:18px 0}.record{border-top:1px solid #d9e5eb;padding:15px 0}.record p{margin:5px 0}.record button{margin:6px 8px 0 0}.hint{color:#5b6f7b;font-size:14px}.local{background:#fff3d9;border-radius:10px;padding:12px;font-size:14px}button:disabled{opacity:.5;cursor:wait}:focus-visible{outline:3px solid #e58e23;outline-offset:3px}#form-message{min-height:24px}.legend{font-size:14px;margin:8px 0}.legend span{margin-right:18px}@media(max-width:800px){.workspace{grid-template-columns:1fr}#map{height:340px}}
+main{max-width:1200px}.workspace{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;margin-bottom:26px}.panel{background:white;padding:22px;border-radius:20px}#map{height:440px;border-radius:12px;background:#ddeaf0;z-index:0}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.toolbar button{margin:0 0 12px}.secondary{background:#e5eef3;color:#173047}label{display:block;font-size:14px;margin:12px 0 5px}input,select,textarea{width:100%;padding:11px;border:1px solid #a7bdca;border-radius:8px;font:inherit;background:white;color:#173047}.coordinates{display:grid;grid-template-columns:1fr 1fr;gap:10px}textarea{resize:vertical}#records{margin:18px 0}.record{border-top:1px solid #d9e5eb;padding:15px 0}.record p{margin:5px 0}.record button{margin:6px 8px 0 0}.hint{color:#5b6f7b;font-size:14px}.model-guide{background:#edf5f8;border-left:3px solid #397c91;border-radius:10px;padding:14px 16px;font-size:14px;line-height:1.8}.local{background:#fff3d9;border-radius:10px;padding:12px;font-size:14px}button:disabled{opacity:.5;cursor:wait}:focus-visible{outline:3px solid #e58e23;outline-offset:3px}#form-message{min-height:24px}.legend{font-size:14px;margin:8px 0}.legend span{margin-right:18px}@media(max-width:800px){.workspace{grid-template-columns:1fr}#map{height:340px}}
 </style></head>
 <body>
 <main>
 <header>
-<small>BUSAN · OCEAN WATCH · V3 이동 실험</small>
+<small>BUSAN · OCEAN WATCH · V3.1 이동 실험</small>
 <h1>송정·해운대 해파리 관측 지도</h1>
 <p>발견 지점을 기록하고 주변 해양 관측자료를 함께 확인하세요.</p>
 <div id="notice" role="status">관측자료를 불러오는 중입니다.</div>
@@ -68,13 +68,13 @@ main{max-width:1200px}.workspace{display:grid;grid-template-columns:1.6fr 1fr;ga
 <section class="panel" id="drift-panel" style="margin-bottom:20px">
 <small>EXPERIMENT · 검증 전</small><h2 style="margin-top:8px">흐름이 일정하다면 어디로 이동할까?</h2>
 <p>아래 발견 기록의 <b>이동 실험</b>을 누르세요. 가까운 부이의 유향·유속을 발견 지점에 적용해, 발견 시각으로부터 10·20·30분 뒤의 위치를 계산합니다.</p>
-<div class="local">점선은 실제 해파리 경로나 출몰 예보가 아닙니다. 수심·해안선·방파제·파도·해파리의 수영을 반영하지 않아 육지를 가로지를 수 있습니다. 수거 위치나 입욕 여부를 결정하는 근거로 사용하지 마세요.</div>
+<div class="model-guide"><b>관측자료로 이동 방향을 탐색해 보세요.</b><br>점선은 현재 흐름이 일정하게 이어질 때의 이동을 살펴보는 실험 결과입니다. 실제 이동은 지형과 파도 등에 따라 달라질 수 있으므로, 현장 확인을 위한 참고자료로 활용해 주세요. 수거·입욕 판단은 이 결과만으로 결정하기보다 현장 담당자의 확인과 공식 안내를 함께 따라 주세요.</div>
 <label for="sensitivity"><input type="checkbox" id="sensitivity" style="width:auto"> 방향 ±20°, 속력 ±25%를 바꾼 비교선도 보기</label>
 <p class="hint">비교선의 폭은 임의로 정한 실험 조건이며, 실제 오차 범위나 출현 확률을 뜻하지 않습니다.</p>
 <button type="button" id="clear-drift" class="secondary">이동선 지우기</button>
 <div id="drift-message" role="status">발견 기록을 선택해 주세요.</div>
 <div id="drift-table" style="overflow-x:auto"></div>
-<details style="margin-top:15px"><summary>계산 가정과 자료 사용 기준</summary><p class="hint">유향은 북쪽 0°에서 시계방향으로 측정한 ‘흘러가는 방향’으로 가정합니다. 이 부이 자료의 진북·자북 기준과 측정 수심은 아직 확인하지 못했습니다. 풍속을 유속에 임의로 더하지 않으며 바람은 아래 관측자료로 함께 확인합니다. 관측 유속에는 바람의 영향이 이미 포함될 수 있습니다.<br>시제품의 임시 기준: 실시간 수집 모드, 최근 수집 성공, 수집·관측·발견 시각 모두 30분 이내, 발견과 관측의 차이 20분 이내, 부이까지 5km 이내일 때만 계산합니다. 이 기준을 통과해도 예측 정확성을 보장하지 않습니다.<br>거리 = 유속(cm/s) ÷ 100 × 경과 시간(초). 위경도는 구형 지구의 거리·방위각 공식으로 계산합니다.<br>방향 용어 참고: <a href="https://tidesandcurrents.noaa.gov/glossary.html" target="_blank" rel="noopener">NOAA 해양 용어집</a></p></details>
+<details style="margin-top:15px"><summary>계산 가정과 자료 사용 기준</summary><p class="hint">현재는 실제 해파리 이동과 비교한 검증 전 단계로, 공식 출몰 예보를 제공하지 않습니다. 수심·해안선·방파제·파도·해파리의 수영은 계산에 반영하지 않아 이동선이 육지를 가로지를 수 있습니다.<br>유향은 북쪽 0°에서 시계방향으로 측정한 ‘흘러가는 방향’으로 가정합니다. 이 부이 자료의 진북·자북 기준과 측정 수심은 아직 확인하지 못했습니다. 풍속을 유속에 임의로 더하지 않으며 바람은 아래 관측자료로 함께 확인합니다. 관측 유속에는 바람의 영향이 이미 포함될 수 있습니다.<br>시제품의 임시 기준: 실시간 수집 모드, 최근 수집 성공, 수집·관측·발견 시각 모두 30분 이내, 발견과 관측의 차이 20분 이내, 부이까지 5km 이내일 때만 계산합니다. 이 기준을 통과해도 예측 정확성을 보장하지 않습니다.<br>거리 = 유속(cm/s) ÷ 100 × 경과 시간(초). 위경도는 구형 지구의 거리·방위각 공식으로 계산합니다.<br>방향 용어 참고: <a href="https://tidesandcurrents.noaa.gov/glossary.html" target="_blank" rel="noopener">NOAA 해양 용어집</a></p></details>
 </section>
 <section class="panel"><h2>내 발견 기록 <span id="record-count">0</span>건</h2><p class="hint">모든 기록은 미검증입니다. 기록이 없다는 것은 해파리가 없거나 안전하다는 뜻이 아닙니다.</p><div class="toolbar"><button id="export" class="secondary">기록 파일 내려받기</button><button id="import" class="secondary">기록 파일 불러오기</button></div><input id="import-file" type="file" accept=".json,application/json" hidden><p id="storage-message" role="status" class="hint"></p><div id="records"></div></section>
 <h2 style="margin-top:28px">부이에서 측정한 해양 환경</h2><section id="cards"></section>
