@@ -40,7 +40,7 @@ main{max-width:1200px}.workspace{display:grid;grid-template-columns:1.6fr 1fr;ga
 <body>
 <main>
 <header>
-<small>BUSAN · OCEAN WATCH</small>
+<small>BUSAN · OCEAN WATCH · V3 이동 실험</small>
 <h1>송정·해운대 해파리 관측 지도</h1>
 <p>발견 지점을 기록하고 주변 해양 관측자료를 함께 확인하세요.</p>
 <div id="notice" role="status">관측자료를 불러오는 중입니다.</div>
@@ -65,6 +65,17 @@ main{max-width:1200px}.workspace{display:grid;grid-template-columns:1.6fr 1fr;ga
 <label for="memo">메모</label><textarea id="memo" rows="2" maxlength="500" placeholder="마릿수, 주변 지형 등 관찰한 내용"></textarea>
 <button type="submit">이 브라우저에 저장</button><div id="form-message" role="status"></div>
 </form></section></div>
+<section class="panel" id="drift-panel" style="margin-bottom:20px">
+<small>EXPERIMENT · 검증 전</small><h2 style="margin-top:8px">흐름이 일정하다면 어디로 이동할까?</h2>
+<p>아래 발견 기록의 <b>이동 실험</b>을 누르세요. 가까운 부이의 유향·유속을 발견 지점에 적용해, 발견 시각으로부터 10·20·30분 뒤의 위치를 계산합니다.</p>
+<div class="local">점선은 실제 해파리 경로나 출몰 예보가 아닙니다. 수심·해안선·방파제·파도·해파리의 수영을 반영하지 않아 육지를 가로지를 수 있습니다. 수거 위치나 입욕 여부를 결정하는 근거로 사용하지 마세요.</div>
+<label for="sensitivity"><input type="checkbox" id="sensitivity" style="width:auto"> 방향 ±20°, 속력 ±25%를 바꾼 비교선도 보기</label>
+<p class="hint">비교선의 폭은 임의로 정한 실험 조건이며, 실제 오차 범위나 출현 확률을 뜻하지 않습니다.</p>
+<button type="button" id="clear-drift" class="secondary">이동선 지우기</button>
+<div id="drift-message" role="status">발견 기록을 선택해 주세요.</div>
+<div id="drift-table" style="overflow-x:auto"></div>
+<details style="margin-top:15px"><summary>계산 가정과 자료 사용 기준</summary><p class="hint">유향은 북쪽 0°에서 시계방향으로 측정한 ‘흘러가는 방향’으로 가정합니다. 이 부이 자료의 진북·자북 기준과 측정 수심은 아직 확인하지 못했습니다. 풍속을 유속에 임의로 더하지 않으며 바람은 아래 관측자료로 함께 확인합니다. 관측 유속에는 바람의 영향이 이미 포함될 수 있습니다.<br>시제품의 임시 기준: 실시간 수집 모드, 최근 수집 성공, 수집·관측·발견 시각 모두 30분 이내, 발견과 관측의 차이 20분 이내, 부이까지 5km 이내일 때만 계산합니다. 이 기준을 통과해도 예측 정확성을 보장하지 않습니다.<br>거리 = 유속(cm/s) ÷ 100 × 경과 시간(초). 위경도는 구형 지구의 거리·방위각 공식으로 계산합니다.<br>방향 용어 참고: <a href="https://tidesandcurrents.noaa.gov/glossary.html" target="_blank" rel="noopener">NOAA 해양 용어집</a></p></details>
+</section>
 <section class="panel"><h2>내 발견 기록 <span id="record-count">0</span>건</h2><p class="hint">모든 기록은 미검증입니다. 기록이 없다는 것은 해파리가 없거나 안전하다는 뜻이 아닙니다.</p><div class="toolbar"><button id="export" class="secondary">기록 파일 내려받기</button><button id="import" class="secondary">기록 파일 불러오기</button></div><input id="import-file" type="file" accept=".json,application/json" hidden><p id="storage-message" role="status" class="hint"></p><div id="records"></div></section>
 <h2 style="margin-top:28px">부이에서 측정한 해양 환경</h2><section id="cards"></section>
 <footer>
@@ -179,6 +190,31 @@ update();
 setInterval(update, 30000);
 </script>
 
+<script>
+const OceanDrift = (()=>{
+const R=6371000,rad=d=>d*Math.PI/180,deg=r=>r*180/Math.PI;
+function distance(a,b){const dlat=rad(b.lat-a.lat),dlon=rad(b.lon-a.lon);const h=Math.sin(dlat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dlon/2)**2;return 2*R*Math.asin(Math.sqrt(Math.min(1,h)));}
+function destination(lat,lon,meters,bearing){const p=rad(lat),l=rad(lon),b=rad(bearing),d=meters/R;const p2=Math.asin(Math.sin(p)*Math.cos(d)+Math.cos(p)*Math.sin(d)*Math.cos(b));const l2=l+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(p),Math.cos(d)-Math.sin(p)*Math.sin(p2));return [deg(p2),((deg(l2)+540)%360)-180];}
+function recent(time,now){const age=now-Date.parse(time);return Number.isFinite(age)&&age>=0&&age<=30*60000;}
+function prepare(record,data,status,now){
+if(!record || !Number.isFinite(record.lat)||!Number.isFinite(record.lon)||record.lat<35.1||record.lat>35.22||record.lon<129.12||record.lon>129.26)throw Error('발견 위치가 송정·해운대 주변 범위를 벗어납니다.');
+if(!recent(record.seen,now))throw Error('발견 시각이 30분 이내인 기록을 선택하세요. 과거 기록을 현재 위치로 간주하지 않습니다.');
+if(data?.mode!=='live_fetch'||status?.fetch_ok!==true||!recent(data.fetched_at,now)||!recent(status.attempted_at,now))throw Error('최근 30분 이내의 수집 성공 자료가 필요합니다.');
+if(!Array.isArray(data.stations))throw Error('관측소 자료가 없습니다.');
+const candidates=data.stations.filter(s=>['TW_0090','TW_0062'].includes(s.station_id)&&Number.isFinite(s.latitude)&&Number.isFinite(s.longitude)&&s.latitude>=35.1&&s.latitude<=35.22&&s.longitude>=129.12&&s.longitude<=129.26).map(s=>({station:s,d:distance(record,{lat:s.latitude,lon:s.longitude})})).sort((a,b)=>a.d-b.d);
+if(!candidates.length)throw Error('대상 부이 좌표를 확인할 수 없습니다.');
+const {station,d}=candidates[0];
+if(d>5000)throw Error('가장 가까운 부이가 5km보다 멉니다.');
+if(!recent(station.observed_at,now)||station.time_state!=='recent')throw Error('가장 가까운 부이의 관측값이 오래되었거나 시각을 확인할 수 없습니다.');
+if(Math.abs(Date.parse(record.seen)-Date.parse(station.observed_at))>20*60000)throw Error('발견 시각과 부이 관측 시각의 차이가 20분을 넘습니다.');
+const speed=station.values?.current_speed_cm_s,direction=station.values?.current_direction_deg;
+if(station.provider_status?.current_speed_cm_s!=='0'||station.provider_status?.current_direction_deg!=='0'||!Number.isFinite(speed)||speed<0||!Number.isFinite(direction)||direction<0||direction>360)throw Error('가장 가까운 부이의 유향·유속이 결측 또는 점검 상태입니다.');
+const points=[10,20,30].map(minutes=>({minutes,at:new Date(Date.parse(record.seen)+minutes*60000).toISOString(),distance:speed/100*minutes*60,location:destination(record.lat,record.lon,speed/100*minutes*60,direction%360)}));
+return {station,stationDistance:d,speed:speed/100,direction:direction%360,points};
+}
+return {distance,destination,prepare};
+})();
+</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (() => {
@@ -186,7 +222,7 @@ const $ = id => document.getElementById(id);
 const KEY = 'busan-jellyfish-reports-v1';
 const beaches = ['해운대','송정'];
 const kinds = ['모름','노무라입깃해파리','보름달물해파리','기타'];
-let reports=[], map, markers, selected;
+let reports=[], map, markers, selected, driftLayer, activeReport=null;
 const nowInput=()=>new Date(Date.now()+9*3600000).toISOString().slice(0,16);
 $('seen').value=nowInput();
 function valid(r){return r && typeof r.id==='string' && r.id.length<100 && beaches.includes(r.beach) && kinds.includes(r.species) && typeof r.memo==='string' && r.memo.length<=500 && Number.isFinite(r.lat) && r.lat>=35.1 && r.lat<=35.22 && Number.isFinite(r.lon) && r.lon>=129.12 && r.lon<=129.26 && typeof r.seen==='string' && Number.isFinite(Date.parse(r.seen)) && Date.parse(r.seen)<=Date.now();}
@@ -197,7 +233,7 @@ if(window.L){
 map=L.map('map').setView([35.166,129.193],13);
 const tiles=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
 tiles.on('tileerror',()=>{$('map-hint').textContent='배경 지도를 불러오지 못했습니다. 네트워크를 확인하거나 좌표를 직접 입력하세요.';});
-markers=L.layerGroup().addTo(map);
+markers=L.layerGroup().addTo(map);driftLayer=L.layerGroup().addTo(map);
 for(const [name,lat,lon] of [['송정 부이 · TW_0090',35.164722,129.219444],['해운대 부이 · TW_0062',35.148972,129.170166]])L.circleMarker([lat,lon],{radius:9,color:'#126d87',fillColor:'#126d87',fillOpacity:1}).addTo(map).bindPopup(element('p',name));
 map.on('click',e=>choose(e.latlng.lat,e.latlng.lng));
 $('view-all').onclick=()=>map.setView([35.166,129.193],13);
@@ -205,6 +241,7 @@ $('view-hae').onclick=()=>map.setView([35.1585,129.16],15);
 $('view-song').onclick=()=>map.setView([35.179,129.199],15);
 }else{$('map').textContent='지도 라이브러리를 불러오지 못했습니다. 네트워크 연결 후 새로고침하세요. 좌표 입력으로 기록은 가능합니다.';for(const id of ['view-all','view-hae','view-song'])$(id).disabled=true;}
 function draw(){
+if(activeReport && !reports.some(r=>r.id===activeReport.id))clearDrift('선택한 기록이 삭제되어 이동선을 지웠습니다.');
 $('records').replaceChildren();$('record-count').textContent=reports.length;if(markers)markers.clearLayers();
 if(!reports.length)$('records').append(element('p','아직 기록이 없습니다. 지도에서 발견 위치를 선택해 첫 기록을 남기세요.','hint'));
 for(const r of [...reports].sort((a,b)=>Date.parse(b.seen)-Date.parse(a.seen))){
@@ -213,7 +250,8 @@ row.append(element('p',dateText(r.seen)+' · '+r.lat.toFixed(6)+', '+r.lon.toFix
 if(r.memo)row.append(element('p',r.memo));
 let marker;if(map){const popup=element('div');popup.append(element('strong',r.beach+' · '+r.species+' (미검증)'),element('p',dateText(r.seen)),element('p',r.memo));marker=L.circleMarker([r.lat,r.lon],{radius:8,color:'#b8560c',fillColor:'#f7a13a',fillOpacity:.9}).addTo(markers).bindPopup(popup);}
 const view=element('button','지도에서 보기','secondary');view.disabled=!map;view.onclick=()=>{map.setView([r.lat,r.lon],16);marker.openPopup();$('map').scrollIntoView({behavior:'smooth',block:'center'});};
-const remove=element('button','삭제','secondary');remove.onclick=()=>{if(confirm('이 발견 기록을 삭제할까요?'))save(reports.filter(x=>x.id!==r.id));};row.append(view,remove);$('records').append(row);
+const experiment=element('button','이동 실험');experiment.disabled=!map;experiment.onclick=()=>runDrift(r);
+const remove=element('button','삭제','secondary');remove.onclick=()=>{if(confirm('이 발견 기록을 삭제할까요?'))save(reports.filter(x=>x.id!==r.id));};row.append(view,experiment,remove);$('records').append(row);
 }}
 $('report-form').onsubmit=e=>{e.preventDefault();if(reports.length>=1000){$('form-message').textContent='최대 1,000건입니다. 기록을 내려받고 정리하세요.';return;}
 const r={id:crypto.randomUUID(),beach:$('beach').value,lat:Number($('lat').value),lon:Number($('lon').value),seen:$('seen').value+':00+09:00',species:$('species').value,memo:$('memo').value.trim()};
@@ -223,6 +261,34 @@ if(save([...reports,r])){$('form-message').textContent='이 브라우저에 저�
 $('export').onclick=()=>{const blob=new Blob([JSON.stringify({format:KEY,reports},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=element('a');a.href=url;a.download='jellyfish-records.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
 $('import').onclick=()=>$('import-file').click();
 $('import-file').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>2000000)throw Error();const data=JSON.parse(await file.text());if(data.format!==KEY||!Array.isArray(data.reports)||!data.reports.every(valid))throw Error();const merged=new Map(reports.map(r=>[r.id,r]));for(const r of data.reports)if(!merged.has(r.id))merged.set(r.id,r);if(merged.size>1000)throw Error();const count=merged.size-reports.length;if(save([...merged.values()]))$('storage-message').textContent=count+'건을 추가했습니다. 같은 ID의 기록은 중복 추가하지 않습니다.';}catch(err){$('storage-message').textContent='불러오지 못했습니다. 이 앱에서 내보낸 JSON 파일인지, 좌표와 시각이 올바른지 확인하세요.';}e.target.value='';};
+
+function clearDrift(message='이동선을 지웠습니다. 기록을 다시 선택해 주세요.'){
+activeReport=null;if(driftLayer)driftLayer.clearLayers();$('drift-table').replaceChildren();$('drift-message').textContent=message;
+}
+$('clear-drift').onclick=()=>clearDrift();
+$('sensitivity').onchange=()=>{if(activeReport)runDrift(activeReport);};
+let runToken=0;
+async function runDrift(record){
+const token=++runToken;activeReport=record;if(driftLayer)driftLayer.clearLayers();$('drift-table').replaceChildren();$('drift-message').textContent='최근 관측자료를 확인하고 있습니다…';
+try{
+const [data,status]=await Promise.all([readJSON('ocean_data/latest.json'),readJSON('ocean_data/status.json')]);
+if(token!==runToken || !activeReport || activeReport.id!==record.id)return;
+const model=OceanDrift.prepare(record,data,status,Date.now());
+if(!map)throw Error('지도를 불러온 후 다시 시도하세요.');
+const station=model.station,points=model.points;
+if($('sensitivity').checked){for(const angle of [-20,0,20])for(const factor of [.75,1,1.25]){if(!angle&&factor===1)continue;const end=OceanDrift.destination(record.lat,record.lon,model.speed*factor*1800,model.direction+angle);L.polyline([[record.lat,record.lon],end],{color:'#aebbc7',weight:2,dashArray:'3 7',opacity:.8}).addTo(driftLayer);}}
+const line=L.polyline([[record.lat,record.lon],...points.map(p=>p.location)],{color:'#7749b9',weight:4,dashArray:'8 7'}).addTo(driftLayer);
+for(const point of points){const popup=element('div');popup.append(element('strong','발견 '+point.minutes+'분 뒤 · 가정 계산'),element('p',dateText(point.at)),element('p','이동거리 '+Math.round(point.distance)+'m'));
+L.circleMarker(point.location,{radius:6,color:'#7749b9',fillColor:'white',fillOpacity:1}).addTo(driftLayer).bindTooltip('+'+point.minutes+'분',{permanent:true,direction:'right'}).bindPopup(popup);}
+$('drift-message').textContent=record.beach+' 발견 기록 · '+station.station_name+' 부이 적용 (발견 지점에서 '+(model.stationDistance/1000).toFixed(2)+'km). 유속 '+(model.speed*100).toFixed(1)+'cm/s, 유향 '+model.direction+'°. 관측 '+dateText(station.observed_at)+'.';
+const table=element('table');table.style.cssText='width:100%;border-collapse:collapse;margin-top:16px;font-size:14px';
+const head=element('tr');for(const text of ['발견 후','계산 시각 (한국)','이동거리','계산 좌표']){const th=element('th',text);th.style.cssText='text-align:left;padding:10px;border-bottom:1px solid #cbdbe4';head.append(th);}const thead=element('thead');thead.append(head);table.append(thead);
+const body=element('tbody');for(const point of points){const tr=element('tr');for(const text of [point.minutes+'분',dateText(point.at)+(Date.parse(point.at)<Date.now()?' (이미 지난 시각)':''),Math.round(point.distance)+'m',point.location.map(v=>v.toFixed(5)).join(', ')]){const td=element('td',text);td.style.cssText='padding:10px;border-bottom:1px solid #e7eef2';tr.append(td);}body.append(tr);}table.append(body);$('drift-table').append(table);
+map.fitBounds(line.getBounds(),{padding:[45,45],maxZoom:16});$('map').scrollIntoView({behavior:'smooth',block:'center'});
+activeReport={...record,experimentExpires:Math.min(Date.parse(record.seen),Date.parse(station.observed_at),Date.parse(data.fetched_at),Date.parse(status.attempted_at))+30*60000};
+}catch(e){if(token!==runToken || !activeReport || activeReport.id!==record.id)return;clearDrift('계산하지 않았습니다: '+e.message);}
+}
+setInterval(()=>{if(activeReport?.experimentExpires && Date.now()>activeReport.experimentExpires)clearDrift('자료 또는 발견 시각이 30분을 지나 이동선을 지웠습니다. 새 기록과 관측자료가 필요합니다.');},15000);
 draw();
 })();
 </script>
