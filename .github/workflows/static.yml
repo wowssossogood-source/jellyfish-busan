@@ -33,7 +33,11 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Collect ocean data
-        run: python3 ocean_collect.py --output ocean_data
+        id: collect
+        continue-on-error: true
+        run: >-
+          python3 -u ocean_collect.py --output ocean_data
+          --previous-url https://wowssossogood-source.github.io/jellyfish-busan/ocean_data/latest.json
 
       - name: Prepare website
         run: |
@@ -50,3 +54,10 @@ jobs:
       - name: Deploy website
         id: deployment
         uses: actions/deploy-pages@v4
+
+      # Publish failure status first, then retain a failed run for diagnosis.
+      - name: Report collection failure
+        if: steps.collect.outcome == 'failure'
+        run: |
+          echo "::error::Ocean collection failed. The deployed status records the failure; previous observation timestamps are preserved."
+          exit 1
