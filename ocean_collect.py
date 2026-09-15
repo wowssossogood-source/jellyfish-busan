@@ -14,6 +14,9 @@ import math
 from pathlib import Path
 import re
 import time
+import urllib.error
+import http.client
+import ssl
 import urllib.parse
 import urllib.request
 
@@ -75,19 +78,99 @@ def write_json(path, data):
     temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
     temp.replace(path)
 
+def fetch_response(options):
+    """Retry transient transport errors; never execute response scripts."""
+    for attempt in range(1, options.attempts + 1):
+        print(f'수집 시도 {attempt}/{options.attempts} (통신 대기 {options.timeout}초)', flush=True)
+        try:
+            req = urllib.request.Request(
+                URL, data=urllib.parse.urlencode(FORM).encode(),
+                headers={'Content-Type': 'application/x-www-form-urlencoded',
+                         'User-Agent': 'OceanObservationStudentPrototype/1.1'}, method='POST')
+            with urllib.request.urlopen(req, timeout=options.timeout) as response:
+                text = response.read().decode(response.headers.get_content_charset() or 'utf-8')
+            return text, attempt
+        except (urllib.error.URLError, TimeoutError, ConnectionError,
+                http.client.HTTPException) as exc:
+            retry = True
+            if isinstance(exc, urllib.error.HTTPError):
+                retry = exc.code in (408, 429, 500, 502, 503, 504)
+            if isinstance(getattr(exc, 'reason', None), ssl.SSLCertVerificationError):
+                retry = False
+            print(f'통신 실패: {exc}', flush=True)
+            if not retry or attempt == options.attempts:
+                raise
+            delay = options.retry_delay * attempt
+            # Do not retry sooner than the provider requests.
+            if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+                raw = exc.headers.get('Retry-After', '')
+                if raw:
+                    if not raw.isdigit() or int(raw) > 60:
+                        raise
+                    delay = max(delay, int(raw))
+            print(f'{delay}초 후 재시도합니다.', flush=True)
+            time.sleep(delay)
+
+
+def previous_timestamp(data):
+    """Accept only this collector's complete, live snapshot."""
+    if data.get('source_url') != URL or data.get('mode') != 'live_fetch':
+        raise ValueError('이전 자료 출처 또는 형식 불일치')
+    rows = data['stations']
+    if len(rows) != 2 or {r['station_id'] for r in rows} != set(TARGETS):
+        raise ValueError('이전 관측소 자료 불일치')
+    fetched = datetime.fromisoformat(data['fetched_at'])
+    if fetched.tzinfo is None or fetched > datetime.now(KST) + timedelta(minutes=5):
+        raise ValueError('이전 수집 시각 오류')
+    for row in rows:
+        if row['station_name'] != TARGETS[row['station_id']]:
+            raise ValueError('이전 관측소명 불일치')
+        observed = datetime.fromisoformat(row['observed_at'])
+        if observed.tzinfo is None or observed > fetched + timedelta(minutes=5):
+            raise ValueError('이전 관측 시각 오류')
+        for key in ('values', 'raw_values', 'provider_status'):
+            if not isinstance(row[key], dict):
+                raise ValueError('이전 관측값 형식 오류')
+    return fetched
+
+
+def restore_previous(out, previous_url):
+    # Hosted runners start fresh: retrieve the last DEPLOYED snapshot,
+    # not just a possibly old JSON committed to the repository.
+    candidates = []
+    latest = out / 'latest.json'
+    if latest.exists():
+        try:
+            data = json.loads(latest.read_text(encoding='utf-8'))
+            candidates.append((previous_timestamp(data), data))
+        except (ValueError, KeyError, TypeError, AttributeError, OSError):
+            pass
+    if previous_url:
+        try:
+            request = urllib.request.Request(previous_url, headers={'Cache-Control': 'no-cache'})
+            with urllib.request.urlopen(request, timeout=20) as response:
+                data = json.loads(response.read(1_000_001).decode('utf-8'))
+            candidates.append((previous_timestamp(data), data))
+        except Exception as exc:
+            print('이전 배포 자료 복원 실패:', exc, flush=True)
+    if candidates:
+        data = max(candidates, key=lambda pair: pair[0])[1]
+        write_json(latest, data)  # Do not change fetched_at or observed_at.
+        return data['fetched_at']
+    return None
+
 def collect(options):
     out = options.output
     out.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(KST)
+    started = datetime.now(KST)
+    now = started
+    attempts_used = 0
     try:
         if options.input:
             text = options.input.read_text(encoding='utf-8-sig')
         else:
-            req = urllib.request.Request(URL, data=urllib.parse.urlencode(FORM).encode(),
-                headers={'Content-Type': 'application/x-www-form-urlencoded',
-                         'User-Agent': 'OceanObservationStudentPrototype/1.0'}, method='POST')
-            with urllib.request.urlopen(req, timeout=25) as response:
-                text = response.read().decode(response.headers.get_content_charset() or 'utf-8')
+            text, attempts_used = fetch_response(options)
+        now = datetime.now(KST)  # Freshness is measured AFTER the response arrives.
         rows = parse_response(text, now, options.stale_minutes)
         data = {'source_url': URL, 'mode': 'saved_response' if options.input else 'live_fetch',
                 'fetched_at': now.isoformat(), 'stale_after_minutes': options.stale_minutes,
@@ -105,7 +188,8 @@ def collect(options):
             with (out / 'history.jsonl').open('a', encoding='utf-8') as f:
                 f.write(json.dumps(data, ensure_ascii=False) + '\n')
         write_json(latest, data)
-        write_json(out / 'status.json', {'fetch_ok': True, 'attempted_at': now.isoformat()})
+        write_json(out / 'status.json', {'fetch_ok': True, 'attempted_at': now.isoformat(),
+            'started_at': started.isoformat(), 'attempts_used': attempts_used})
         for r in rows:
             v = r['values']
             print(r['station_name'], r['observed_at'], r['time_state'],
@@ -113,19 +197,32 @@ def collect(options):
         print('저장:', latest.resolve())
         return True
     except Exception as exc:
-        write_json(out / 'status.json', {'fetch_ok': False, 'attempted_at': now.isoformat(), 'error': str(exc)})
+        finished = datetime.now(KST)
+        previous_at = restore_previous(out, options.previous_url) if not options.input else None
+        write_json(out / 'status.json', {
+            'fetch_ok': False, 'attempted_at': finished.isoformat(),
+            'started_at': started.isoformat(), 'error': str(exc),
+            'error_type': type(exc).__name__, 'last_success_at': previous_at})
         print('수집 실패:', exc)
         print('기존 latest.json은 보존됩니다. 앱에서는 status.json과 관측 시각을 함께 확인하세요.')
         return False
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--timeout', type=int, default=60)
+    p.add_argument('--attempts', type=int, default=3)
+    p.add_argument('--retry-delay', type=int, default=10)
+    p.add_argument('--previous-url', help='Last deployed latest.json URL, used only after failure')
     p.add_argument('--watch', action='store_true')
     p.add_argument('--interval', type=int, default=600, help='trial polling interval, seconds')
     p.add_argument('--stale-minutes', type=int, default=30, help='prototype freshness cutoff')
     p.add_argument('--input', type=Path)
     p.add_argument('--output', type=Path, default=Path(__file__).resolve().parent / 'ocean_data')
     a = p.parse_args()
+    if not (1 <= a.timeout <= 90 and 1 <= a.attempts <= 3 and 0 <= a.retry_delay <= 30):
+        p.error('timeout: 1~90, attempts: 1~3, retry-delay: 0~30')
+    if a.previous_url and not a.previous_url.startswith('https://'):
+        p.error('이전 배포 자료는 HTTPS 주소여야 합니다.')
     if a.interval < 60 or a.stale_minutes <= 0 or (a.input and a.watch):
         p.error('간격은 60초 이상, 유효시간은 양수여야 하며 저장 응답은 반복 조회할 수 없습니다.')
     try:
